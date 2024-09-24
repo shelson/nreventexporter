@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/shelson/nreventexporter/internal/httphelper"
+	"github.com/shelson/nreventexporter/internal/metadata"
 	"github.com/shelson/nreventexporter/internal/metrictoevent"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer/consumererror"
@@ -23,6 +24,8 @@ import (
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/pmetric/pmetricotlp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 )
 
@@ -36,7 +39,8 @@ type baseExporter struct {
 	logger     *zap.Logger
 	settings   component.TelemetrySettings
 	// Default user-agent header.
-	userAgent string
+	userAgent        string
+	telemetryBuilder *metadata.TelemetryBuilder
 }
 
 const (
@@ -50,6 +54,10 @@ const (
 // Create new exporter.
 func newExporter(cfg component.Config, set exporter.Settings) (*baseExporter, error) {
 	oCfg := cfg.(*Config)
+	telemetryBuilder, err := metadata.NewTelemetryBuilder(set.TelemetrySettings)
+	if err != nil {
+		return nil, err
+	}
 
 	if oCfg.MetricsEndpoint != "" {
 		_, err := url.Parse(oCfg.MetricsEndpoint)
@@ -63,10 +71,11 @@ func newExporter(cfg component.Config, set exporter.Settings) (*baseExporter, er
 
 	// client construction is deferred to start
 	return &baseExporter{
-		config:    oCfg,
-		logger:    set.Logger,
-		userAgent: userAgent,
-		settings:  set.TelemetrySettings,
+		config:           oCfg,
+		logger:           set.Logger,
+		userAgent:        userAgent,
+		settings:         set.TelemetrySettings,
+		telemetryBuilder: telemetryBuilder,
 	}, nil
 }
 
@@ -93,17 +102,19 @@ func (e *baseExporter) pushMetrics(ctx context.Context, md pmetric.Metrics) erro
 	var request []byte
 
 	// Build a NR event payload from the metrics data
-	request = metrictoevent.BuildNREventPayload(e.logger, md)
+	var counter int // number of events in the payload
+	request, counter = metrictoevent.BuildNREventPayload(e.logger, md)
 
 	e.logger.Debug("MetricsExporter", zap.Int("compressed size", len(request)))
 
 	if err != nil {
 		return consumererror.NewPermanent(err)
 	}
-	return e.export(ctx, e.metricsURL, request, e.metricsPartialSuccessHandler)
+	return e.export(ctx, e.metricsURL, request, e.metricsPartialSuccessHandler, counter)
 }
 
-func (e *baseExporter) export(ctx context.Context, url string, request []byte, partialSuccessHandler partialSuccessHandler) error {
+func (e *baseExporter) export(ctx context.Context, url string, request []byte, partialSuccessHandler partialSuccessHandler, counter int) error {
+	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(request))
 	if err != nil {
 		return consumererror.NewPermanent(err)
@@ -118,6 +129,7 @@ func (e *baseExporter) export(ctx context.Context, url string, request []byte, p
 	if err != nil {
 		return fmt.Errorf("failed to make an HTTP request: %w", err)
 	}
+	e.recordMetrics(time.Since(start), counter, req, nil)
 
 	defer func() {
 		// Discard any remaining response body when we are done reading.
@@ -161,7 +173,6 @@ func (e *baseExporter) export(ctx context.Context, url string, request []byte, p
 
 		return exporterhelper.NewThrottleRetry(formattedErr, time.Duration(retryAfter)*time.Second)
 	}
-
 	return consumererror.NewPermanent(formattedErr)
 }
 
@@ -278,4 +289,26 @@ func (e *baseExporter) metricsPartialSuccessHandler(protoBytes []byte, contentTy
 		)
 	}
 	return nil
+}
+
+func (e *baseExporter) recordMetrics(duration time.Duration, count int, req *http.Request, resp *http.Response) {
+	statusCode := 0
+
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
+
+	e.logger.Debug("Exporter request", zap.Int("status_code", statusCode), zap.String("endpoint", req.URL.String()), zap.Int("count", count))
+
+	id := "nreventexporter"
+
+	attrs := attribute.NewSet(
+		attribute.String("status_code", fmt.Sprint(statusCode)),
+		attribute.String("endpoint", req.URL.String()),
+		attribute.String("exporter", id),
+	)
+	e.telemetryBuilder.ExporterRequestsDuration.Add(context.Background(), duration.Milliseconds(), metric.WithAttributeSet(attrs))
+	e.telemetryBuilder.ExporterRequestsBytes.Add(context.Background(), req.ContentLength, metric.WithAttributeSet(attrs))
+	e.telemetryBuilder.ExporterRequestsRecords.Add(context.Background(), int64(count), metric.WithAttributeSet(attrs))
+	e.telemetryBuilder.ExporterRequestsSent.Add(context.Background(), 1, metric.WithAttributeSet(attrs))
 }

@@ -78,13 +78,13 @@ func MetricsToNREvents(logger *zap.Logger, md pmetric.Metrics) []nrEvent {
 }
 
 // Build the compressed JSON payload from pdata.Metrics
-func BuildNREventPayload(logger *zap.Logger, md pmetric.Metrics) []byte {
+func BuildNREventPayload(logger *zap.Logger, md pmetric.Metrics) ([]byte, int) {
 	nrEventList := MetricsToNREvents(logger, md)
 	// Convert the slice of maps to a JSON string
 	request, _ := json.Marshal(nrEventList)
 
 	// we gzip this and return it
-	return CompressNREventPayload(string(request))
+	return CompressNREventPayload(string(request)), len(nrEventList)
 }
 
 func CompressNREventPayload(payload string) []byte {

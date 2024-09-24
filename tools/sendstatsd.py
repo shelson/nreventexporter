@@ -7,7 +7,7 @@ SERVER_PORT = 8125
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 count = 0
-countmax = 10
+countmax = 100
 counter = 0
 
 while True:

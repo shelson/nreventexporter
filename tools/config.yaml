@@ -8,6 +8,10 @@ receivers:
         observer_type: "gauge" #default
       - statsd_type: "timer" #default
         observer_type: "gauge" #default
+  otlp/internal_metrics:
+    protocols:
+      grpc:
+        endpoint: localhost:14317
 
 processors:
   batch:
@@ -29,9 +33,17 @@ exporters:
 service:
   pipelines:
     metrics:
-      receivers: [statsd]
+      receivers: [statsd, otlp/internal_metrics]
       exporters: [nreventexporter]
   telemetry:
     logs:
       level: debug
+    metrics:
+      readers:
+        - periodic:   # default
+            interval: 10000
+            exporter:
+              otlp:
+                protocol: grpc/protobuf
+                endpoint: localhost:14317
 
