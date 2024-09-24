@@ -27,6 +27,7 @@ go work use nreventexporter
 ```
 - Copy `config.yaml` out of `nreventexporter/tools` and add your NR Api-key
 - Run `go run ./otelcol-dev --config ./config.yaml` - this compiles/runs the dev code in place and you can debug using your favourite IDE/tools
+- You can use `tools/sendstatsd.py` to send some fake statsd packets for testing
 
 phew!
 
