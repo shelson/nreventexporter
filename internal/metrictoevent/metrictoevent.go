@@ -25,52 +25,61 @@ func resourceToEventMap(res pcommon.Resource, eventMap nrEvent) error {
 	return nil
 }
 
+// metricToEventMap will return a set of dimensions from the
+// metric attributes.
+func metricToEventMap(currentMetric pmetric.Metric) nrEvent {
+	nrEventMap := make(nrEvent)
+	nrEventMap["eventType"] = "otel_statsd"
+	nrEventMap["name"] = currentMetric.Name()
+	nrEventMap["type"] = currentMetric.Type().String()
+	if nrEventMap["type"] == "Gauge" {
+		nrEventMap["valueType"] = currentMetric.Gauge().DataPoints().At(0).ValueType().String()
+		if nrEventMap["valueType"] == "Double" {
+			nrEventMap["value"] = currentMetric.Gauge().DataPoints().At(0).DoubleValue()
+		} else {
+			nrEventMap["value"] = currentMetric.Gauge().DataPoints().At(0).IntValue()
+		}
+		nrEventMap["timestamp"] = currentMetric.Gauge().DataPoints().At(0).Timestamp().String()
+
+		currentMetric.Gauge().DataPoints().At(0).Attributes().Range(func(k string, val pcommon.Value) bool {
+			nrEventMap[k] = val.AsString()
+			return true
+		})
+	} else if nrEventMap["type"] == "Sum" {
+		nrEventMap["valueType"] = currentMetric.Sum().DataPoints().At(0).ValueType().String()
+		if nrEventMap["valueType"] == "Double" {
+			nrEventMap["value"] = currentMetric.Sum().DataPoints().At(0).DoubleValue()
+		} else {
+			nrEventMap["value"] = currentMetric.Sum().DataPoints().At(0).IntValue()
+		}
+		nrEventMap["timestamp"] = currentMetric.Sum().DataPoints().At(0).Timestamp().String()
+
+		currentMetric.Sum().DataPoints().At(0).Attributes().Range(func(k string, val pcommon.Value) bool {
+			nrEventMap[k] = val.AsString()
+			return true
+		})
+	} else {
+		// We need to handle Histogram and Summary most likely
+	}
+	return nrEventMap
+}
+
 // MetricsToNREvents converts pdata.Metrics to New Relic event json.
 func MetricsToNREvents(logger *zap.Logger, md pmetric.Metrics) []nrEvent {
 	var nrEventList []nrEvent
-	nrEventMap := make(nrEvent)
 	rms := md.ResourceMetrics()
 	logger.Debug("MetricsExporter", zap.Int("ResourceMetricsCount", rms.Len()))
 	for i := 0; i < rms.Len(); i++ {
 		rm := rms.At(i)
-		resourceToEventMap(rm.Resource(), nrEventMap)
+		//resourceToEventMap(rm.Resource(), nrEventMap)
 
 		for j := 0; j < rm.ScopeMetrics().Len(); j++ {
 			ilm := rm.ScopeMetrics().At(j)
 			for k := 0; k < ilm.Metrics().Len(); k++ {
 				currentMetric := ilm.Metrics().At(k)
-				nrEventMap["eventType"] = "otel_statsd"
-				nrEventMap["name"] = currentMetric.Name()
-				nrEventMap["type"] = currentMetric.Type().String()
-				if nrEventMap["type"] == "Gauge" {
-					nrEventMap["valueType"] = currentMetric.Gauge().DataPoints().At(0).ValueType().String()
-					if nrEventMap["valueType"] == "Double" {
-						nrEventMap["value"] = currentMetric.Gauge().DataPoints().At(0).DoubleValue()
-					} else {
-						nrEventMap["value"] = currentMetric.Gauge().DataPoints().At(0).IntValue()
-					}
-					nrEventMap["timestamp"] = currentMetric.Gauge().DataPoints().At(0).Timestamp().String()
-
-					currentMetric.Gauge().DataPoints().At(0).Attributes().Range(func(k string, val pcommon.Value) bool {
-						nrEventMap[k] = val.AsString()
-						return true
-					})
-				} else if nrEventMap["type"] == "Sum" {
-					nrEventMap["valueType"] = currentMetric.Sum().DataPoints().At(0).ValueType().String()
-					if nrEventMap["valueType"] == "Double" {
-						nrEventMap["value"] = currentMetric.Sum().DataPoints().At(0).DoubleValue()
-					} else {
-						nrEventMap["value"] = currentMetric.Sum().DataPoints().At(0).IntValue()
-					}
-					nrEventMap["timestamp"] = currentMetric.Sum().DataPoints().At(0).Timestamp().String()
-
-					currentMetric.Sum().DataPoints().At(0).Attributes().Range(func(k string, val pcommon.Value) bool {
-						nrEventMap[k] = val.AsString()
-						return true
-					})
-				}
+				nrEventMap := metricToEventMap(currentMetric)
+				nrEventList = append(nrEventList, nrEventMap)
 			}
-			nrEventList = append(nrEventList, nrEventMap)
 		}
 	}
 
